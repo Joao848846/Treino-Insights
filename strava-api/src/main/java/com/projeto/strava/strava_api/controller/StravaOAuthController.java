@@ -1,24 +1,24 @@
-package com.projeto.strava.strava_api.controller; // Adapte este pacote para o seu projeto
+package com.projeto.strava.strava_api.controller; // Adapte este pacote
 
-import org.springframework.beans.factory.annotation.Value; // Para ler as configurações do application.properties
-import org.springframework.http.HttpHeaders; // Para manipular cabeçalhos HTTP
-import org.springframework.http.HttpStatus; // Para definir o status da resposta HTTP
-import org.springframework.http.ResponseEntity; // Para construir respostas HTTP completas
-import org.springframework.stereotype.Controller; // Indica que esta classe é um Controller do Spring
-import org.springframework.web.bind.annotation.GetMapping; // Para mapear requisições GET
-import org.springframework.web.bind.annotation.RequestMapping; // Para definir o caminho base dos endpoints
-import org.springframework.web.bind.annotation.RequestParam; // Para pegar parâmetros da URL
+import com.projeto.strava.strava_api.model.strava.StravaAuth;
+import com.projeto.strava.strava_api.service.StravaAuthService; // Importe seu serviço
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
-import java.net.URI; // Para trabalhar com URLs
-import java.net.URLEncoder; // Para codificar URLs (segurança)
-import java.nio.charset.StandardCharsets; // Para definir o encoding da URL
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
-@Controller // Usamos @Controller aqui porque faremos um REDIRECIONAMENTO do navegador
-@RequestMapping("/oauth") // Define que todos os endpoints neste controller começarão com /oauth
+@Controller
+@RequestMapping("/oauth")
 public class StravaOAuthController {
 
-    // --- Injeção das configurações do application.properties ---
-    // @Value lê o valor da propriedade definida no application.properties
     @Value("${strava.client-id}")
     private String clientId;
 
@@ -28,68 +28,76 @@ public class StravaOAuthController {
     @Value("${strava.api.auth-url}")
     private String authUrl;
 
+    // --- INJETANDO SEU SERVIÇO DE AUTENTICAÇÃO ---
+    private final StravaAuthService stravaAuthService;
 
-    // Este método vai REDIRECIONAR o navegador do usuário para a página de autorização do Strava.
+    // Construtor para que o Spring injete o StravaAuthService
+    public StravaOAuthController(StravaAuthService stravaAuthService) {
+        this.stravaAuthService = stravaAuthService;
+    }
+
+
     @GetMapping("/strava/authorize")
     public ResponseEntity<Void> authorizeStrava() {
-
         String scope = "activity:read_all,profile:read_all";
-
-
         String state = "seu_estado_aleatorio_e_seguro_aqui_pra_testar"; // ANOTE ESTE VALOR!
 
-        // Constrói a URL COMPLETA para a qual o navegador do usuário será redirecionado
         String fullAuthUrl = String.format(
                 "%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&state=%s",
                 authUrl,
                 clientId,
-                URLEncoder.encode(redirectUri, StandardCharsets.UTF_8), // Codifica a URL de redirecionamento para segurança
-                URLEncoder.encode(scope, StandardCharsets.UTF_8), // Codifica os scopes
-                URLEncoder.encode(state, StandardCharsets.UTF_8) // Codifica o state
+                URLEncoder.encode(redirectUri, StandardCharsets.UTF_8),
+                URLEncoder.encode(scope, StandardCharsets.UTF_8),
+                URLEncoder.encode(state, StandardCharsets.UTF_8)
         );
 
-        // Cria um cabeçalho HTTP para o redirecionamento
         HttpHeaders headers = new HttpHeaders();
-        headers.setLocation(URI.create(fullAuthUrl)); // Define para onde o navegador deve ir
-
-        // Retorna uma resposta de redirecionamento (status 302 Found)
+        headers.setLocation(URI.create(fullAuthUrl));
         return new ResponseEntity<>(headers, HttpStatus.FOUND);
     }
 
-    // --- ENDPOINT 2: Receber o Callback do Strava (APÓS a Autorização do Usuário) ---
-    // Esta URL DEVE SER EXATAMENTE a que você configurou em strava.redirect-uri no application.properties
-    // Ex: http://localhost:8080/oauth/callback/strava
+    // --- MÉTODO handleStravaCallback MODIFICADO ---
     @GetMapping("/callback/strava")
     public String handleStravaCallback(
-            @RequestParam("code") String authorizationCode, // O código de autorização que o Strava te manda
-            @RequestParam("scope") String scope,           // Os scopes que foram concedidos
-            @RequestParam("state") String state,           // O valor do 'state' que você enviou antes (para verificar segurança)
-            @RequestParam(value = "error", required = false) String error // Se houver um erro na autorização
+            @RequestParam("code") String authorizationCode,
+            @RequestParam("scope") String scope,
+            @RequestParam("state") String state,
+            @RequestParam(value = "error", required = false) String error
     ) {
-
-        String expectedState = "seu_estado_aleatorio_e_seguro_aqui_pra_testar"; // USE O MESMO VALOR DO MÉTODO authorizeStrava()
+        String expectedState = "seu_estado_aleatorio_e_seguro_aqui_pra_testar"; // MESMO VALOR DO authorizeStrava()
         if (!expectedState.equals(state)) {
             System.err.println("Erro de segurança: 'state' inválido! Recebido: " + state + ", Esperado: " + expectedState);
             return "Erro de segurança: 'state' inválido. Não prossiga.";
         }
 
-        // --- Lida com Erros de Autorização do Strava ---
         if (error != null) {
             System.err.println("Erro na autorização do Strava: " + error);
             return "Autorização Strava falhou. Erro: " + error;
         }
 
-        // --- SUCESSO! Código de Autorização Recebido ---
-        System.out.println("\n-----------------------------------------------------");
-        System.out.println("SUCESSO! Código de Autorização Recebido:");
-        System.out.println(authorizationCode); // ESTE É O SEU 'CODE'!
-        System.out.println("Escopo concedido: " + scope);
-        System.out.println("-----------------------------------------------------\n");
+        try {
+            // --- CHAMA O SERVIÇO PARA TROCAR O CÓDIGO E SALVAR OS TOKENS ---
+            // O método exchangeCodeForTokens já cuida de salvar no MongoDB
+            StravaAuth stravaAuth = stravaAuthService.exchangeCodeForTokens(authorizationCode);
 
-        // Por enquanto, para você ver o 'code' no navegador e no console:
-        return "<html><body><h1>Autorização Strava Concluída!</h1>" +
-                "<p>Seu Código de Autorização (temporário): <b>" + authorizationCode + "</b></p>" +
-                "<p><i>Anote este código! Ele será usado na próxima etapa com o cURL (troca por tokens).</i></p>" +
-                "</body></html>";
+            System.out.println("\n-----------------------------------------------------");
+            System.out.println("Autorização Strava Concluída e Tokens Salvos/Atualizados!");
+            System.out.println("ID do Atleta Strava: " + stravaAuth.getAthleteId());
+            System.out.println("Access Token (parcial): " + stravaAuth.getAccessToken().substring(0, 10) + "...");
+            System.out.println("Refresh Token (parcial): " + stravaAuth.getRefreshToken().substring(0, 10) + "...");
+            System.out.println("-----------------------------------------------------\n");
+
+            return "<html><body><h1>Autorização Strava Concluída com Sucesso!</h1>" +
+                    "<p>Seus tokens foram salvos no banco de dados.</p>" +
+                    "<p>ID do Atleta Strava: <b>" + stravaAuth.getAthleteId() + "</b></p>" +
+                    "</body></html>";
+
+        } catch (RuntimeException e) {
+            System.err.println("Erro ao processar tokens do Strava: " + e.getMessage());
+            // Em um cenário real, você faria um redirecionamento para uma página de erro mais amigável
+            return "<html><body><h1>Erro ao conectar com Strava!</h1>" +
+                    "<p>Detalhes: " + e.getMessage() + "</p>" +
+                    "</body></html>";
+        }
     }
 }
